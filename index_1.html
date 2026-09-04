@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestão de Frequência SENAI - Prof. Fábio (v12.2)</title>
+    <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        @media print {
+            @page { size: A4; margin: 0; }
+            body { background: white !important; color: black !important; }
+            .no-print { display: none !important; }
+            /* O modal do formulário/relatório fica dentro de um "overlay" de tela cheia
+               (fundo escuro, centralizado) que precisa desaparecer na impressão — mas sem
+               levar o conteúdo junto! Antes esse overlay usava a classe .no-print, que o
+               escondia por inteiro (display:none num elemento-pai esconde tudo dentro dele,
+               mesmo que o filho tente forçar display:block) — por isso a impressão saía em
+               branco. Agora o overlay tem sua própria classe e só perde o visual de "janela
+               flutuante", continuando visível.
+            */
+            .print-overlay {
+                position: static !important;
+                inset: auto !important;
+                background: none !important;
+                backdrop-filter: none !important;
+                padding: 0 !important;
+                display: block !important;
+                overflow: visible !important;
+            }
+            .printable-form {
+                display: block !important;
+                width: 21cm;
+                height: 29.7cm;
+                padding: 1.5cm;
+                margin: 0;
+                position: absolute;
+                top: 0; left: 0;
+                z-index: 1000;
+                background: white !important;
+                color: black !important;
+            }
+            /* Relatório de ranking: ao contrário do formulário de compensação (uma página
+               fixa em A4), este pode ter várias seções e mais alunos do que cabem numa
+               página só — então fica no fluxo normal (sem position:absolute) e deixa o
+               navegador paginar automaticamente. */
+            .printable-report {
+                display: block !important;
+                position: static !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                border-radius: 0 !important;
+                box-shadow: none !important;
+                background: white !important;
+                color: black !important;
+            }
+            table { border-collapse: collapse; width: 100%; }
+            td, th { border: 1px solid black !important; padding: 4px; }
+        }
+    </style>
+</head>
+<body class="text-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        const Icons = {
+            Upload: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+            Settings: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>,
+            Search: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+            Printer: () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>,
+            X: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+            Check: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+            Chart: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+            Download: () => <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+            Alert: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+            Trash: () => <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        };
+
+        // ---- Constantes de armazenamento local (persistência) ----
+        // O "_v2" aqui é o que resolve o bug relatado: até a v11.2, o nome da disciplina
+        // gravado junto com cada relatório mudou de formato entre versões (ex.: "FPL"
+        // numa versão antiga vs. "FPL — FUNDAMENTOS DOS PROCESSOS LOGÍSTICOS" numa mais
+        // nova). Como o app identifica cada relatório importado por "disciplina+turma",
+        // um relatório salvo com o formato antigo NUNCA era substituído por uma
+        // reimportação mais recente — os dois ficavam acumulados lado a lado no
+        // navegador, um deles ainda com o valor errado de faltas de antes da correção do
+        // rodapé. Trocar a chave de armazenamento para "_v2" faz esta versão começar com
+        // uma base limpa (os dados antigos ficam ignorados, não apagados do disco) — é só
+        // reimportar os PDFs normalmente.
+        const STORAGE_KEY_DATA = 'senaiFrequencia_dataStore_v2';
+        const STORAGE_KEY_IGNORED = 'senaiFrequencia_ignoredIds_v2';
+
+        const loadStoredData = () => {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY_DATA);
+                return raw ? JSON.parse(raw) : {};
+            } catch (e) {
+                console.error('Não foi possível carregar os dados salvos:', e);
+                return {};
+            }
+        };
+
+        const loadStoredIgnored = () => {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY_IGNORED);
+                return raw ? new Set(JSON.parse(raw)) : new Set();
+            } catch (e) {
+                return new Set();
+            }
+        };
+
+        // Logo embutida no próprio arquivo (não depende mais de link externo do Google Drive)
+        const LOGO_DATA_URI = "data:image/jpeg;base64,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";
+
+        const App = () => {
+            const [dataStore, setDataStore] = useState(loadStoredData);
+            const [selectedTurma, setSelectedTurma] = useState('Todas');
+            const [selectedDiscipline, setSelectedDiscipline] = useState('Consolidado');
+            const [ignoredIds, setIgnoredIds] = useState(loadStoredIgnored);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [statusFilter, setStatusFilter] = useState('all');
+            // Controla a ordenação da tabela. "key" é a coluna (name/absences/impact) e
+            // "direction" é asc/desc. Cada filtro do painel (Compensação, Ação Preventiva,
+            // Hall da Fama...) tem uma ordenação padrão sensata ao ser clicado, mas o
+            // professor pode clicar num cabeçalho de coluna a qualquer momento para reordenar
+            // manualmente — ver defaultSortForFilter() e handleSort() abaixo.
+            const [sortConfig, setSortConfig] = useState({ key: 'impact', direction: 'desc' });
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [activeForm, setActiveForm] = useState(null);
+            const [isManageModalOpen, setIsManageModalOpen] = useState(false);
+            const [lastImportWarnings, setLastImportWarnings] = useState([]);
+            const [logoFailed, setLogoFailed] = useState(false);
+            const [showRankingReport, setShowRankingReport] = useState(false);
+
+            // Salva automaticamente sempre que os dados ou a lista de ignorados mudam
+            useEffect(() => {
+                try { localStorage.setItem(STORAGE_KEY_DATA, JSON.stringify(dataStore)); }
+                catch (e) { console.error('Não foi possível salvar os dados no navegador:', e); }
+            }, [dataStore]);
+
+            useEffect(() => {
+                try { localStorage.setItem(STORAGE_KEY_IGNORED, JSON.stringify([...ignoredIds])); }
+                catch (e) { /* silencioso: não é crítico */ }
+            }, [ignoredIds]);
+
+            // Extrai os dados de UMA disciplina (Unidade Curricular) a partir do texto do PDF.
+            // IMPORTANTE: um único PDF do SENAI pode conter VÁRIAS disciplinas — uma por página,
+            // cada uma com seu próprio cabeçalho (Turma, Unidade Curricular, CHP, Aulas Dadas,
+            // Docente) e sua própria lista de alunos. Por isso essa função recebe o texto de UMA
+            // seção (um trecho já separado por handleFileUpload), nunca o PDF inteiro de uma vez
+            // — antes disso era misturado tudo junto e as disciplinas depois da primeira página
+            // eram perdidas.
+            // Além disso: quando um campo não é encontrado, esta função NÃO inventa mais um valor
+            // padrão para os campos que afetam o cálculo de percentual (CHP e Aulas Dadas) — em
+            // vez disso, registra um aviso e a entrada fica marcada como "dados incompletos",
+            // para nunca mostrar um percentual de faltas calculado com números fabricados.
+            const parseSenaiSection = (text, fileName) => {
+                const warnings = [];
+
+                // O relatório marca a turma com uma palavra de status entre parênteses —
+                // "(Definitiva)" para turmas em andamento, mas "(Concluída)" para turmas de
+                // semestres já encerrados (e pode haver outras, como "Cancelada"). Antes só
+                // "(Definitiva)" era aceito, então relatórios de turmas já concluídas apareciam
+                // como "Turma não identificada". Agora aceitamos qualquer parênteses aqui.
+                const turmaRegex = /Turma:\s*(.*?)\s*\([^)]*\)/i;
+                const turmaMatch = text.match(turmaRegex);
+                let rawTurma = turmaMatch ? turmaMatch[1].trim().toUpperCase() : null;
+                if (!rawTurma) {
+                    warnings.push('Não foi possível identificar a Turma no PDF.');
+                    rawTurma = 'S/T';
+                }
+                let className = rawTurma;
+                if (rawTurma.includes('-')) {
+                    const parts = rawTurma.split('-');
+                    const lastPart = parts[parts.length - 1];
+                    const secondLastPart = parts[parts.length - 2];
+                    className = (lastPart.length <= 2 && parts.length > 1) ? `${secondLastPart}-${lastPart}` : lastPart;
+                }
+
+                // No relatório oficial, esse campo vem assim: "Unidade Curricular: PROAP - PROAP -
+                // PROGRAMAÇÃO DO ABASTECIMENTO DA PRODUÇÃO 1° Período de: ...". Ou seja: o código
+                // da disciplina aparece repetido duas vezes, seguido do nome completo, até a
+                // informação de período. Tentamos primeiro pegar o nome completo (mais claro pra
+                // reconhecer a disciplina); se o formato vier diferente do esperado, caímos para
+                // pegar só o código curto — melhor mostrar algo do que nada.
+                let disciplineName = null;
+                const ucRegexFull = /Unidade Curricular:\s*(\S+)\s*-\s*\S+\s*-\s*(.*?)\s*\d+°\s*Per[ií]odo/i;
+                const ucMatchFull = text.match(ucRegexFull);
+                if (ucMatchFull) {
+                    const ucCode = ucMatchFull[1].trim().toUpperCase();
+                    const ucFullName = ucMatchFull[2].trim().replace(/\s+/g, ' ').toUpperCase();
+                    disciplineName = ucFullName ? `${ucCode} — ${ucFullName}` : ucCode;
+                } else {
+                    const ucRegexSimple = /Unidade Curricular:\s*(.*?)\s*-/i;
+                    const ucMatchSimple = text.match(ucRegexSimple);
+                    disciplineName = ucMatchSimple ? ucMatchSimple[1].trim().toUpperCase() : null;
+                }
+                if (!disciplineName) {
+                    warnings.push('Não foi possível identificar a Unidade Curricular (disciplina) no PDF.');
+                    disciplineName = 'UC NÃO IDENTIFICADA';
+                }
+
+                const aulasDadasRegex = /AULAS\s+DADAS[\s\S]*?Turma\s+Toda:\s*(\d+)/i;
+                const aulasDadasMatch = text.match(aulasDadasRegex);
+                const currentHorasDadas = aulasDadasMatch ? parseInt(aulasDadasMatch[1], 10) : null;
+                if (currentHorasDadas === null) {
+                    warnings.push('Não foi possível identificar o total de "Aulas Dadas" (Turma Toda). O percentual desta turma/disciplina não será calculado até você conferir o PDF.');
+                }
+
+                const chpMatch = text.match(/Total CHP:\s*(\d+)/i);
+                const currentCHP = chpMatch ? parseInt(chpMatch[1], 10) : null;
+                if (currentCHP === null) {
+                    warnings.push('Não foi possível identificar o "Total CHP" (carga horária prevista). O percentual desta turma/disciplina não será calculado até você conferir o PDF.');
+                }
+
+                const cursoRegex = /Curso:\s*(.*?)\s*\(/i;
+                const cursoMatch = text.match(cursoRegex);
+                const cursoName = cursoMatch ? cursoMatch[1].trim() : null;
+                if (!cursoName) warnings.push('Não foi possível identificar o nome do Curso no PDF.');
+
+                // Regex do docente: pega letras maiúsculas/espaços logo após "Docente:", com um
+                // tamanho máximo razoável para um nome de pessoa. No relatório real, logo depois
+                // do nome vem "Nº de Matrícula..." — o "º" já não faz parte do alfabeto aceito,
+                // então a captura para sozinha ali; às vezes sobra uma letra solta (o "N" de "Nº"),
+                // que é removida na limpeza abaixo.
+                const docenteRegex = /Docente:\s*([A-ZÀ-Ÿ][A-ZÀ-Ÿ'\.\s]{2,58})/;
+                const docenteMatch = text.match(docenteRegex);
+                let docenteName = docenteMatch ? docenteMatch[1].trim().replace(/\s+/g, ' ') : null;
+                if (docenteName) {
+                    // remove uma eventual letra solta que "vazou" do campo seguinte (ex.: "...FIORAVANTE N")
+                    docenteName = docenteName.replace(/\s+[A-ZÀ-Ÿ]$/, '').trim();
+                    // Segunda camada de proteção: se mesmo assim o nome capturado tiver palavras
+                    // demais ou conter termos que claramente pertencem a outro campo do relatório
+                    // (e não a um nome de pessoa), descartamos e tratamos como "não identificado"
+                    // em vez de arriscar mostrar um nome errado na ficha oficial.
+                    const wordCount = docenteName.split(' ').filter(Boolean).length;
+                    const looksLikeAnotherField = /\b(AULAS|DADAS|TOTAL|CURSO|TURMA|UNIDADE|CARGA|HOR[AÁ]RIO|ALUNO|MATR[IÍ]CULA|SITUA[CÇ][AÃ]O|CHP|PER[IÍ]ODO)\b/.test(docenteName);
+                    if (wordCount > 6 || looksLikeAnotherField) docenteName = null;
+                }
+                if (!docenteName) warnings.push('Não foi possível identificar o nome do Docente no PDF.');
+
+                // Corta fora o rodapé de cada página ("Observações: ASSINATURA DO DOCENTE:
+                // DATA: dd/mm/aaaa ...") antes de procurar os alunos. Sem isso, a data do
+                // rodapé (ex.: "03/09/2026") era lida como se fosse mais um número no bloco
+                // do ÚLTIMO aluno da lista, e o "último número do bloco" (usado como total de
+                // faltas) virava "2026" em vez do valor real — o bug mais grave que você viu.
+                const obsIndex = text.search(/Observa[cç][õo]es:/i);
+                const studentAreaText = obsIndex !== -1 ? text.slice(0, obsIndex) : text;
+
+                const studentBlocks = studentAreaText.split(/(?=\b\d{8}\b)/g);
+                const students = [];
+
+                studentBlocks.forEach(block => {
+                    const cleanBlock = block.replace(/\s+/g, ' ').trim();
+                    const enrollmentMatch = cleanBlock.match(/^(\d{8})/);
+                    if (!enrollmentMatch) return;
+
+                    const enrollment = enrollmentMatch[1];
+                    const allNumbers = cleanBlock.match(/\d+/g);
+                    if (allNumbers && allNumbers.length >= 4) {
+                        const absencesRaw = allNumbers[allNumbers.length - 1];
+                        const absences = parseInt(absencesRaw, 10);
+                        const namePart = cleanBlock.slice(8).match(/[A-ZÀ-Ÿ\s()\-]{3,}/);
+                        const name = namePart ? namePart[0].trim() : "Nome não identificado";
+
+                        // Checagem de sanidade: a leitura do número de faltas (heurística
+                        // "último número do bloco de texto") pode ser enganada por um
+                        // número extra no PDF. Quando o resultado parece implausível,
+                        // o aluno é marcado como "uncertain" e a interface avisa o
+                        // professor para conferir manualmente, em vez de confiar cegamente.
+                        let uncertain = false;
+                        if (isNaN(absences) || absences < 0) uncertain = true;
+                        if (!namePart) uncertain = true;
+                        if (currentCHP !== null && !isNaN(absences) && absences > currentCHP) uncertain = true;
+
+                        if (enrollment !== "00000000") {
+                            students.push({
+                                id: enrollment,
+                                name,
+                                absences: isNaN(absences) ? 0 : absences,
+                                className,
+                                curso: cursoName || 'Não identificado',
+                                docente: docenteName || 'Não identificado',
+                                uncertain
+                            });
+                        }
+                    }
+                });
+
+                if (students.length === 0) {
+                    warnings.push('Nenhum aluno foi identificado neste PDF. Confira se o arquivo é realmente o relatório de frequência do SENAI.');
+                }
+
+                return {
+                    key: `${disciplineName}-${className}`,
+                    disciplineName,
+                    className,
+                    chp: currentCHP,
+                    horasDadas: currentHorasDadas,
+                    students,
+                    warnings,
+                    fileName: fileName || '',
+                    importedAt: new Date().toISOString()
+                };
+            };
+
+            const handleFileUpload = async (event) => {
+                const files = Array.from(event.target.files);
+                if (files.length === 0) return;
+                setIsProcessing(true);
+
+                try {
+                    const pdfjsLib = window['pdfjs-dist/build/pdf'];
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+                    const newEntries = {};
+                    const importWarnings = [];
+                    for (const file of files) {
+                        const arrayBuffer = await file.arrayBuffer();
+                        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                        let fullText = "";
+                        for (let i = 1; i <= pdf.numPages; i++) {
+                            const page = await pdf.getPage(i);
+                            const textContent = await page.getTextContent();
+                            fullText += textContent.items.map(item => item.str).join(' ') + '\n';
+                        }
+
+                        // Um único PDF pode trazer várias disciplinas (uma por página, mesma
+                        // turma). Cada página começa com "Curso: ..." — dividimos o texto ali,
+                        // e processamos cada pedaço (seção) separadamente. Isso corrige a perda
+                        // de disciplinas que existia quando o arquivo inteiro era tratado como
+                        // uma coisa só.
+                        const sections = fullText
+                            .split(/(?=Curso:\s)/i)
+                            .map(s => s.trim())
+                            .filter(s => s.length > 0 && /Unidade Curricular:/i.test(s));
+
+                        if (sections.length === 0) {
+                            importWarnings.push({
+                                file: file.name,
+                                key: `arquivo-nao-reconhecido-${file.name}`,
+                                label: 'Arquivo não reconhecido',
+                                warnings: ['Não foi encontrada nenhuma seção de "Unidade Curricular" neste PDF. Confira se é realmente o relatório de Controle de Frequência do SENAI.']
+                            });
+                            continue;
+                        }
+
+                        sections.forEach(section => {
+                            const extracted = parseSenaiSection(section, file.name);
+                            const existing = newEntries[extracted.key];
+                            if (existing) {
+                                // Mesma disciplina + turma apareceu mais de uma vez dentro do MESMO
+                                // arquivo — no relatório real isso acontece quando uma disciplina
+                                // continua numa segunda página (mesmo cabeçalho repetido, só com
+                                // outro trecho de datas). Nesses casos o total de faltas de cada
+                                // aluno já vem repetido/igual em cada página, mas por segurança
+                                // combinamos os alunos pegando o maior valor de faltas encontrado
+                                // para cada um, em vez de simplesmente descartar a página anterior.
+                                const mergedStudents = [...existing.students];
+                                extracted.students.forEach(s => {
+                                    const idx = mergedStudents.findIndex(m => m.id === s.id);
+                                    if (idx === -1) mergedStudents.push(s);
+                                    else if (s.absences > mergedStudents[idx].absences) mergedStudents[idx] = s;
+                                });
+                                newEntries[extracted.key] = { ...extracted, students: mergedStudents };
+                            } else {
+                                newEntries[extracted.key] = extracted;
+                            }
+                            if (extracted.warnings.length > 0) {
+                                importWarnings.push({ file: file.name, key: extracted.key, label: `${extracted.disciplineName} — ${extracted.className}`, warnings: extracted.warnings });
+                            }
+                        });
+                    }
+                    setDataStore(prev => ({ ...prev, ...newEntries }));
+                    setLastImportWarnings(importWarnings);
+                } catch (e) {
+                    alert("Erro ao ler PDF: " + e.message);
+                } finally {
+                    setIsProcessing(false);
+                    event.target.value = null;
+                }
+            };
+
+            const removeEntry = (key) => {
+                setDataStore(prev => {
+                    const next = { ...prev };
+                    delete next[key];
+                    return next;
+                });
+            };
+
+            const clearAllData = () => {
+                if (window.confirm('Limpar todos os dados importados? Esta ação não pode ser desfeita.')) {
+                    setDataStore({});
+                    setIgnoredIds(new Set());
+                    setLastImportWarnings([]);
+                }
+            };
+
+            // Cada linha aqui é uma combinação (aluno, disciplina) — não um aluno só. No modo
+            // "Consolidado" isso significa que um aluno que está estourado em duas disciplinas
+            // aparece em DUAS linhas, cada uma com o rótulo da própria disciplina e seu próprio
+            // percentual (o limite de 25%/30% é sempre calculado por disciplina — nunca fazia
+            // sentido somar a carga horária de disciplinas diferentes numa única conta). Isso
+            // também faz a busca por nome trazer o aluno em todas as disciplinas de uma vez,
+            // cada ocorrência mostrada separadamente.
+            const processedData = useMemo(() => {
+                const entries = Object.values(dataStore);
+                if (entries.length === 0) return [];
+                const filtered = entries.filter(e => (selectedTurma === 'Todas' || e.className === selectedTurma) && (selectedDiscipline === 'Consolidado' || e.disciplineName === selectedDiscipline));
+
+                const rows = [];
+                filtered.forEach(entry => {
+                    const entryIncomplete = entry.chp === null || entry.horasDadas === null;
+                    entry.students.forEach(s => {
+                        if (ignoredIds.has(s.id)) return;
+                        const rowKey = `${s.id}::${entry.key}`;
+                        const base = { ...s, rowKey, discipline: entry.disciplineName, className: entry.className, totalCHP: entry.chp, horasDadas: entry.horasDadas, hasUncertainReading: s.uncertain };
+                        if (entryIncomplete) {
+                            // Se este relatório específico tinha CHP ou Aulas Dadas não
+                            // identificados, NÃO calculamos percentual nenhum PARA ESSA
+                            // DISCIPLINA — é exatamente esse "cálculo com número inventado" que
+                            // causava faltas "estourando" sem motivo real. Mostramos "dados
+                            // incompletos" em vez de um percentual (possivelmente) errado.
+                            rows.push({ ...base, percentage: null, realPercentage: null, isCompensar: false, isPreventive: false, isIncomplete: true });
+                            return;
+                        }
+                        const percentage = entry.chp > 0 ? (s.absences / entry.chp) * 100 : null;
+                        const realPercentage = entry.horasDadas > 0 ? (s.absences / entry.horasDadas) * 100 : null;
+                        const isCompensar = percentage !== null && percentage > 25;
+                        const isPreventive = !isCompensar && realPercentage !== null && realPercentage >= 30;
+                        rows.push({ ...base, percentage, realPercentage, isCompensar, isPreventive, isIncomplete: false });
+                    });
+                });
+                return rows;
+            }, [dataStore, selectedTurma, selectedDiscipline, ignoredIds]);
+
+            // As medalhas do "Hall da Fama" agora são por LINHA (aluno+disciplina), não por
+            // aluno — senão um aluno com poucas faltas numa disciplina "herdaria" a mesma
+            // medalha numa disciplina diferente onde ele vai mal.
+            const rankings = useMemo(() => {
+                const withPercentage = processedData.filter(s => !s.isIncomplete);
+                if (withPercentage.length === 0) return {};
+                const uniqueAbsences = [...new Set(withPercentage.map(s => s.absences))].sort((a, b) => a - b);
+                const map = {};
+                withPercentage.forEach(s => {
+                    const rank = uniqueAbsences.indexOf(s.absences);
+                    if (rank === 0) map[s.rowKey] = "🥇";
+                    else if (rank === 1) map[s.rowKey] = "🥈";
+                    else if (rank === 2) map[s.rowKey] = "🥉";
+                });
+                return map;
+            }, [processedData]);
+
+            const stats = useMemo(() => {
+                if (processedData.length === 0) return null;
+                const withPercentage = processedData.filter(s => !s.isIncomplete);
+                // "Alunos Ativos" é uma contagem de PESSOAS (RA único), não de linhas —
+                // diferente de critical/atRisk/incomplete, que contam ocorrências por
+                // disciplina de propósito (é o que faz um aluno estourado em duas
+                // disciplinas aparecer duas vezes ali). Aqui não: um aluno matriculado em
+                // 3 disciplinas continua sendo 1 aluno só neste número absoluto.
+                const uniqueStudentCount = new Set(processedData.map(s => s.id)).size;
+                return {
+                    total: uniqueStudentCount,
+                    critical: processedData.filter(s => s.isCompensar).length,
+                    atRisk: processedData.filter(s => s.isPreventive).length,
+                    incomplete: processedData.filter(s => s.isIncomplete).length,
+                    avg: withPercentage.length > 0 ? (withPercentage.reduce((acc, s) => acc + (100 - s.percentage), 0) / withPercentage.length).toFixed(1) : '—'
+                };
+            }, [processedData]);
+
+            const availableTurmas = useMemo(() => ['Todas', ...new Set(Object.values(dataStore).map(e => e.className))].sort(), [dataStore]);
+            // A lista de disciplinas do combobox agora respeita a turma selecionada — antes
+            // mostrava as disciplinas de TODAS as turmas juntas, então ao escolher uma turma
+            // específica apareciam UCs de outros cursos que nem existem ali.
+            const availableDisciplines = useMemo(() => {
+                const relevantEntries = Object.values(dataStore).filter(e => selectedTurma === 'Todas' || e.className === selectedTurma);
+                return ['Consolidado', ...new Set(relevantEntries.map(e => e.disciplineName))].sort();
+            }, [dataStore, selectedTurma]);
+
+            // Se a turma mudar e a disciplina escolhida não existir mais nessa turma, volta
+            // para "Consolidado" em vez de deixar o filtro "travado" numa combinação inválida
+            // (o que fazia a tabela aparecer vazia sem explicação).
+            useEffect(() => {
+                if (!availableDisciplines.includes(selectedDiscipline)) {
+                    setSelectedDiscipline('Consolidado');
+                }
+            }, [availableDisciplines]);
+
+            // A cada coluna clicável (Estudante / Faltas / Comparação de Impacto) corresponde
+            // uma chave de ordenação. Ordenar por "name" agrupa naturalmente as linhas de um
+            // mesmo aluno que aparece em várias disciplinas, já que elas ficam lado a lado em
+            // ordem alfabética (usamos a disciplina como critério de desempate, então a ordem
+            // entre as linhas do mesmo aluno fica sempre estável).
+            const compareByKey = (key) => (a, b) => {
+                switch (key) {
+                    case 'name':
+                        return a.name.localeCompare(b.name, 'pt-BR') || (a.discipline || '').localeCompare(b.discipline || '', 'pt-BR');
+                    case 'absences':
+                        return (a.absences - b.absences) || a.name.localeCompare(b.name, 'pt-BR');
+                    case 'impact':
+                    default:
+                        return ((a.realPercentage ?? -1) - (b.realPercentage ?? -1)) || a.name.localeCompare(b.name, 'pt-BR');
+                }
+            };
+
+            const filteredAndSorted = useMemo(() => {
+                let res = processedData.filter(s => {
+                    const matchesSearch = s.name.toLowerCase().includes(searchTerm.toLowerCase());
+                    if (statusFilter === 'top') return matchesSearch && !!rankings[s.rowKey];
+                    if (statusFilter === 'preventive') return matchesSearch && s.isPreventive;
+                    if (statusFilter === 'danger') return matchesSearch && s.isCompensar;
+                    if (statusFilter === 'incomplete') return matchesSearch && s.isIncomplete;
+                    return matchesSearch;
+                });
+                const dir = sortConfig.direction === 'asc' ? 1 : -1;
+                res.sort((a, b) => compareByKey(sortConfig.key)(a, b) * dir);
+                return res;
+            }, [processedData, searchTerm, statusFilter, rankings, sortConfig]);
+
+            // Ordenação padrão de cada filtro do painel, aplicada no momento em que o
+            // professor clica no card. "Ação Preventiva" e "Compensação" pedem ordem
+            // alfabética (o que já agrupa as disciplinas de um mesmo aluno); "Hall da Fama"
+            // mantém o critério antigo (menos faltas primeiro); os demais mantêm o
+            // comportamento de antes (maior comprometimento primeiro).
+            const defaultSortForFilter = (filter) => {
+                if (filter === 'top') return { key: 'absences', direction: 'asc' };
+                if (filter === 'preventive' || filter === 'danger' || filter === 'incomplete') return { key: 'name', direction: 'asc' };
+                return { key: 'impact', direction: 'desc' };
+            };
+            const applyStatusFilter = (filter) => {
+                setStatusFilter(filter);
+                setSortConfig(defaultSortForFilter(filter));
+            };
+            // Clique num cabeçalho de coluna: se já é a coluna ativa, inverte a direção;
+            // senão troca de coluna com uma direção inicial que costuma fazer mais sentido
+            // (nome em ordem alfabética, números do maior para o menor).
+            const handleSort = (key) => {
+                setSortConfig(prev => {
+                    if (prev.key === key) return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+                    return { key, direction: key === 'name' ? 'asc' : 'desc' };
+                });
+            };
+            const sortArrow = (key) => {
+                if (sortConfig.key !== key) return <span className="text-slate-300 ml-1 normal-case">↕</span>;
+                return <span className="ml-1 text-indigo-500 normal-case">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>;
+            };
+
+            const entriesWithIssues = useMemo(() => Object.values(dataStore).filter(e => e.warnings && e.warnings.length > 0), [dataStore]);
+
+            const situacaoLabel = (s) => {
+                if (s.isIncomplete) return 'Dados incompletos';
+                if (s.isCompensar) return 'Compensar';
+                if (s.isPreventive) return 'Ação preventiva';
+                return 'Regular';
+            };
+
+            // Exporta a lista atualmente filtrada (respeita turma, disciplina, busca e o
+            // cartão selecionado) como CSV — pra mandar pra coordenação ou áreas que
+            // precisam agir, sem precisar copiar tabela na mão. Usa ";" como separador e um
+            // BOM no início porque é o que o Excel em português espera pra abrir certo
+            // (com "," ele quebra números e acentuação).
+            const exportCSV = () => {
+                const escapeCSV = (value) => {
+                    const str = String(value ?? '');
+                    return /[",;\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+                };
+                const headers = ['Nome', 'RA', 'Turma', 'Disciplina', 'Faltas (h)', '% Limite Total (máx. 25%)', '% Comprometimento Atual (máx. 30%)', 'Situação'];
+                const rows = filteredAndSorted.map(s => [
+                    s.name,
+                    s.id,
+                    s.className,
+                    s.discipline,
+                    s.absences,
+                    s.percentage !== null ? s.percentage.toFixed(1).replace('.', ',') : 'N/D',
+                    s.realPercentage !== null ? s.realPercentage.toFixed(1).replace('.', ',') : 'N/D',
+                    situacaoLabel(s)
+                ]);
+                const csvContent = '﻿' + [headers, ...rows].map(row => row.map(escapeCSV).join(';')).join('\r\n');
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                const turmaPart = selectedTurma === 'Todas' ? 'todas-turmas' : selectedTurma.replace(/\s+/g, '-');
+                const dateStr = new Date().toISOString().slice(0, 10);
+                link.href = url;
+                link.download = `frequencia_${turmaPart}_${dateStr}.csv`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            };
+
+            // Dados do "Ranking para Compartilhar". Diferente da tabela principal, aqui
+            // SEMPRE olhamos todas as disciplinas do aluno dentro da turma selecionada —
+            // ignoramos o filtro de disciplina do topo, porque "zero faltas" e "ação
+            // preventiva" só fazem sentido avaliando o conjunto completo: um aluno só entra
+            // no ranking de frequência exemplar se estiver com zero faltas em TODAS as
+            // disciplinas que cursa, não só na que está selecionada no momento.
+            const rankingReportData = useMemo(() => {
+                const entries = Object.values(dataStore).filter(e => selectedTurma === 'Todas' || e.className === selectedTurma);
+                const byStudent = {};
+                entries.forEach(entry => {
+                    const entryIncomplete = entry.chp === null || entry.horasDadas === null;
+                    entry.students.forEach(s => {
+                        if (ignoredIds.has(s.id)) return;
+                        if (!byStudent[s.id]) byStudent[s.id] = { id: s.id, name: s.name, className: entry.className, rows: [] };
+                        if (entryIncomplete) {
+                            byStudent[s.id].rows.push({ discipline: entry.disciplineName, totalCHP: entry.chp, horasDadas: entry.horasDadas, absences: s.absences, percentage: null, realPercentage: null, isIncomplete: true, isPreventive: false });
+                            return;
+                        }
+                        const percentage = entry.chp > 0 ? (s.absences / entry.chp) * 100 : null;
+                        const realPercentage = entry.horasDadas > 0 ? (s.absences / entry.horasDadas) * 100 : null;
+                        const isCompensar = percentage !== null && percentage > 25;
+                        const isPreventive = !isCompensar && realPercentage !== null && realPercentage >= 30;
+                        byStudent[s.id].rows.push({ discipline: entry.disciplineName, totalCHP: entry.chp, horasDadas: entry.horasDadas, absences: s.absences, percentage, realPercentage, isIncomplete: false, isPreventive });
+                    });
+                });
+                const students = Object.values(byStudent);
+                // Frequência exemplar: zero faltas em TODAS as disciplinas (nenhuma com dado
+                // incompleto, senão não dá pra garantir o zero).
+                const perfect = students
+                    .filter(st => st.rows.length > 0 && st.rows.every(r => !r.isIncomplete && r.absences === 0))
+                    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+                // Ação preventiva: mostramos só as disciplinas em que o aluno está de fato
+                // nessa situação (ele pode ir bem em uma matéria e mal em outra).
+                const preventive = students
+                    .map(st => ({ ...st, rows: st.rows.filter(r => r.isPreventive) }))
+                    .filter(st => st.rows.length > 0)
+                    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+                return { perfect, preventive };
+            }, [dataStore, selectedTurma, ignoredIds]);
+
+            // Gera uma imagem PNG do relatório de ranking pra facilitar o compartilhamento
+            // no WhatsApp (uma imagem abre em pré-visualização direto na conversa, ao
+            // contrário de um PDF). Os botões da própria janela (marcados "no-print") são
+            // ignorados na captura, senão apareceriam dentro da imagem final.
+            const downloadReportImage = async () => {
+                const el = document.getElementById('ranking-report-content');
+                if (!el || typeof html2canvas === 'undefined') return;
+                const canvas = await html2canvas(el, {
+                    scale: 2,
+                    backgroundColor: '#ffffff',
+                    useCORS: true,
+                    ignoreElements: (element) => element.classList && element.classList.contains('no-print'),
+                });
+                const link = document.createElement('a');
+                const turmaPart = selectedTurma === 'Todas' ? 'todas-turmas' : selectedTurma.replace(/\s+/g, '-');
+                const dateStr = new Date().toISOString().slice(0, 10);
+                link.download = `ranking_frequencia_${turmaPart}_${dateStr}.png`;
+                link.href = canvas.toDataURL('image/png');
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            // Cor progressiva de risco: verde (tranquilo) → amarelo (atenção) → laranja
+            // (alerta) → vermelho (crítico, já passou do limite). O "ratio" é o quanto do
+            // limite já foi consumido — não é a mesma coisa que o percentual em si, porque
+            // cada barra tem seu próprio limite (25% ou 30%).
+            const riskStyle = (value, threshold) => {
+                if (value === null || value === undefined) return { bar: 'bg-slate-300', text: 'text-slate-400', chip: 'bg-slate-100' };
+                const ratio = value / threshold;
+                if (ratio < 0.5) return { bar: 'bg-emerald-500', text: 'text-emerald-700', chip: 'bg-emerald-100' };
+                if (ratio < 0.8) return { bar: 'bg-yellow-400', text: 'text-yellow-700', chip: 'bg-yellow-100' };
+                if (ratio < 1.0) return { bar: 'bg-orange-500', text: 'text-orange-700', chip: 'bg-orange-100' };
+                return { bar: 'bg-red-600', text: 'text-red-700', chip: 'bg-red-100' };
+            };
+
+            // Barra de impacto reutilizável: mostra o percentual DENTRO da barra, uma marca
+            // vertical no valor de referência (o limite), e a cor muda progressivamente
+            // conforme o risco (em vez de só indigo/laranja fixos como antes).
+            const ImpactBar = ({ label, value, threshold, thresholdLabel }) => {
+                const c = riskStyle(value, threshold);
+                if (value === null) {
+                    return (
+                        <div className="space-y-2">
+                            <div className="flex justify-between text-[13px] font-black text-slate-400 uppercase tracking-widest"><span>{label}</span><span>N/D</span></div>
+                            <div className="h-7 bg-slate-100 rounded-full border border-slate-200"></div>
+                        </div>
+                    );
+                }
+                const scaleMax = threshold * 1.6;
+                const fillPct = Math.min((value / scaleMax) * 100, 100);
+                const markerPct = Math.min((threshold / scaleMax) * 100, 100);
+                const showLabelInside = fillPct > 16;
+                return (
+                    <div className="space-y-2">
+                        <div className={`flex justify-between text-[13px] font-black uppercase tracking-widest ${c.text}`}>
+                            <span>{label}</span>
+                            <span className={`${c.chip} px-2 rounded-lg`}>{thresholdLabel}</span>
+                        </div>
+                        <div className="relative h-7 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                            <div className={`h-full ${c.bar} transition-all duration-700 flex items-center justify-end pr-2`} style={{ width: `${fillPct}%` }}>
+                                {showLabelInside && <span className="text-[10px] font-black text-white drop-shadow whitespace-nowrap">{value.toFixed(1)}%</span>}
+                            </div>
+                            {!showLabelInside && <span className="absolute inset-y-0 left-2 flex items-center text-[10px] font-black text-slate-500">{value.toFixed(1)}%</span>}
+                            <div className="absolute top-0 bottom-0 w-0.5 bg-slate-600/50" style={{ left: `${markerPct}%` }} title={`Limite de referência: ${thresholdLabel}`}></div>
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-900">
+                    <header className="bg-white border-b border-slate-200 p-6 sticky top-0 z-50 no-print shadow-sm">
+                        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
+                            <div className="flex items-center gap-6">
+                                <div className="bg-white p-1 rounded-2xl w-20 h-20 overflow-hidden shadow-md border border-slate-100 flex items-center justify-center">
+                                    {!logoFailed ? (
+                                        <img src={LOGO_DATA_URI} className="w-full h-full object-contain" onError={() => setLogoFailed(true)} />
+                                    ) : (
+                                        <span className="text-indigo-600 font-black text-xl">SENAI</span>
+                                    )}
+                                </div>
+                                <div><h1 className="text-2xl font-black text-slate-800 tracking-tight">Gestão de Frequência</h1><p className="text-[11px] uppercase font-bold text-slate-500 tracking-[0.2em]">CT 7.90 • Prof. Fábio Fioravante</p></div>
+                            </div>
+                            <div className="flex gap-3 flex-wrap justify-center">
+                                <select value={selectedTurma} onChange={e => setSelectedTurma(e.target.value)} className="bg-indigo-50 border-none rounded-xl text-xs font-black uppercase p-2.5 text-indigo-700 shadow-sm outline-none focus:ring-2 focus:ring-indigo-500">{availableTurmas.map(t => <option key={t} value={t}>{t === 'Todas' ? 'Todas as Turmas' : `Turma: ${t}`}</option>)}</select>
+                                <select value={selectedDiscipline} onChange={e => setSelectedDiscipline(e.target.value)} className="bg-indigo-50 border-none rounded-xl text-xs font-black uppercase p-2.5 text-indigo-700 shadow-sm outline-none focus:ring-2 focus:ring-indigo-500">{availableDisciplines.map(d => <option key={d} value={d}>{d === 'Consolidado' ? 'Consolidado (todas UCs)' : d}</option>)}</select>
+                                <button onClick={() => setIsManageModalOpen(true)} className="relative bg-white border border-slate-200 p-2.5 rounded-xl text-slate-600 hover:bg-slate-50 shadow-sm">
+                                    <Icons.Settings />
+                                    {entriesWithIssues.length > 0 && <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></span>}
+                                </button>
+                                <label className="bg-indigo-600 px-6 py-2.5 rounded-xl text-xs font-black text-white uppercase cursor-pointer hover:bg-indigo-700 shadow-lg flex gap-2 items-center active:scale-95 transition-all"><Icons.Upload /> {isProcessing ? 'A Processar...' : 'Importar PDF'}<input type="file" className="hidden" accept=".pdf" onChange={handleFileUpload} multiple /></label>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-7xl mx-auto p-6 space-y-8 no-print pb-20">
+                        {lastImportWarnings.length > 0 && (
+                            <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-6 space-y-3">
+                                <div className="flex justify-between items-start gap-4">
+                                    <div className="flex gap-3 items-start">
+                                        <span className="text-amber-500 mt-0.5"><Icons.Alert /></span>
+                                        <div>
+                                            <p className="font-black text-amber-800 text-sm uppercase tracking-wide">Atenção: alguns PDFs importados agora têm dados que não foram totalmente reconhecidos</p>
+                                            <p className="text-amber-700 text-xs mt-1">Para esses casos, o percentual de faltas NÃO foi calculado (para evitar mostrar um número errado). Confira o PDF original ou o formato do relatório.</p>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setLastImportWarnings([])} className="text-amber-400 hover:text-amber-600 shrink-0"><Icons.X /></button>
+                                </div>
+                                <div className="space-y-2">
+                                    {lastImportWarnings.map((w, i) => (
+                                        <div key={i} className="bg-white/70 rounded-2xl p-4 text-xs">
+                                            <p className="font-black text-slate-700">{w.file} <span className="text-slate-400 font-bold">({w.label})</span></p>
+                                            <ul className="list-disc list-inside text-amber-700 mt-1 space-y-0.5">
+                                                {w.warnings.map((msg, j) => <li key={j}>{msg}</li>)}
+                                            </ul>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {stats && (
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+                                <button onClick={() => applyStatusFilter('all')} className={`text-left bg-white p-6 rounded-[2rem] border transition-all ${statusFilter === 'all' ? 'ring-2 ring-indigo-500 shadow-xl' : 'border-slate-100 shadow-sm'}`}><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Alunos Ativos</p><div className="text-4xl font-black text-slate-800">{stats.total}</div></button>
+                                <button onClick={() => applyStatusFilter('top')} className={`text-left bg-white p-6 rounded-[2rem] border border-b-8 border-b-emerald-400 transition-all ${statusFilter === 'top' ? 'ring-2 ring-emerald-500 shadow-xl' : 'border-slate-100 shadow-sm'}`}><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hall da Fama</p><div className="text-4xl font-black text-emerald-500">{stats.avg}{stats.avg !== '—' ? '%' : ''}</div></button>
+                                <button onClick={() => applyStatusFilter('preventive')} className={`text-left bg-white p-6 rounded-[2rem] border border-l-8 border-l-blue-400 transition-all ${statusFilter === 'preventive' ? 'ring-2 ring-blue-500 shadow-xl' : 'border-slate-100 shadow-sm'}`}><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ação Preventiva (≥30%)</p><div className="text-4xl font-black text-blue-500">{stats.atRisk}</div></button>
+                                <button onClick={() => applyStatusFilter('danger')} className={`text-left bg-white p-6 rounded-[2rem] border border-l-8 border-l-red-500 transition-all ${statusFilter === 'danger' ? 'ring-2 ring-red-500 shadow-xl' : 'border-slate-100 shadow-sm'}`}><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Compensação (&gt;25%)</p><div className="text-4xl font-black text-red-500">{stats.critical}</div></button>
+                            </div>
+                        )}
+
+                        {stats && stats.incomplete > 0 && (
+                            <button onClick={() => applyStatusFilter('incomplete')} className={`w-full text-left bg-white p-5 rounded-[2rem] border-2 border-dashed transition-all flex items-center justify-between ${statusFilter === 'incomplete' ? 'ring-2 ring-amber-500 border-amber-400' : 'border-amber-200'}`}>
+                                <div className="flex items-center gap-3"><span className="text-amber-500"><Icons.Alert /></span><span className="text-sm font-black text-amber-700 uppercase tracking-wide">{stats.incomplete} aluno(s) com dados incompletos — percentual não calculado</span></div>
+                                <span className="text-[10px] font-black text-amber-500 uppercase">Ver lista</span>
+                            </button>
+                        )}
+
+                        <div className="bg-white rounded-[3rem] border border-slate-100 overflow-hidden shadow-2xl shadow-slate-200/50">
+                            <div className="p-8 border-b border-slate-50 flex items-center gap-4 justify-between"><div className="relative flex-1"><span className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300"><Icons.Search /></span><input type="text" placeholder="Filtrar por nome ou RA..." className="w-full bg-slate-50 border-none rounded-2xl py-4 pl-14 pr-6 text-slate-700 font-bold outline-none focus:ring-2 focus:ring-indigo-500 shadow-inner" onChange={e => setSearchTerm(e.target.value)} /></div>
+                                <button onClick={() => setShowRankingReport(true)} title="Gerar um ranking visual (zero faltas + ação preventiva) para compartilhar com a turma, ex.: no WhatsApp" className="shrink-0 bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 rounded-2xl text-xs font-black text-white uppercase flex gap-2 items-center hover:from-indigo-700 hover:to-purple-700 shadow-lg active:scale-95 transition-all">🏆 Ranking p/ Compartilhar</button>
+                                {filteredAndSorted.length > 0 && (
+                                    <button onClick={exportCSV} title="Exportar a lista atual (com os filtros aplicados) como CSV para enviar à coordenação" className="shrink-0 bg-emerald-600 px-5 py-4 rounded-2xl text-xs font-black text-white uppercase flex gap-2 items-center hover:bg-emerald-700 shadow-lg active:scale-95 transition-all"><Icons.Download /> Exportar CSV</button>
+                                )}
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse">
+                                    <thead><tr className="text-[11px] font-black uppercase text-slate-400 tracking-[0.25em] bg-slate-50/50 border-b border-slate-100">
+                                        <th className="p-10 cursor-pointer select-none hover:text-slate-600 transition-colors" onClick={() => handleSort('name')} title="Ordenar por nome do aluno">Estudante{sortArrow('name')}</th>
+                                        <th className="p-10 text-center cursor-pointer select-none hover:text-slate-600 transition-colors" onClick={() => handleSort('absences')} title="Ordenar por horas de falta">Faltas{sortArrow('absences')}</th>
+                                        <th className="p-10 w-[500px] text-center cursor-pointer select-none hover:text-slate-600 transition-colors" onClick={() => handleSort('impact')} title="Ordenar por comprometimento atual (%)"><Icons.Chart /> Comparação de Impacto{sortArrow('impact')}</th>
+                                        <th className="p-10 text-right">Ação</th>
+                                    </tr></thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                        {filteredAndSorted.length === 0 && (
+                                            <tr><td colSpan="4" className="p-10 text-center text-slate-400 font-bold text-sm">Nenhum aluno encontrado. Importe um PDF ou ajuste os filtros.</td></tr>
+                                        )}
+                                        {filteredAndSorted.map(s => {
+                                            const toComp = (!s.isIncomplete && s.isCompensar) ? Math.ceil(s.absences - (s.totalCHP * 0.25)) : null;
+                                            return (
+                                                <tr key={s.rowKey} className={`hover:bg-slate-50/80 transition-all ${rankings[s.rowKey] ? 'bg-emerald-50/20' : ''}`}>
+                                                    <td className="p-10"><div><div className="flex items-center gap-3">{rankings[s.rowKey] && <span className="text-3xl">{rankings[s.rowKey]}</span>}<div className="font-black text-slate-700 text-lg">{s.name}</div></div><div className="text-[10px] font-bold text-slate-400 uppercase mt-1">RA: {s.id} • {s.className}</div><div className="inline-block mt-2 px-3 py-1 rounded-lg bg-indigo-50 text-indigo-600 text-[10px] font-black uppercase tracking-wide">{s.discipline || 'Disciplina não identificada'}</div></div></td>
+                                                    <td className="p-10 text-center">
+                                                        <div className="text-3xl font-black text-slate-800">{s.absences}h</div>
+                                                        {s.hasUncertainReading && <div title="A leitura desse número no PDF pode estar errada — confira o arquivo original." className="text-[9px] font-black text-amber-600 uppercase mt-1 flex items-center justify-center gap-1"><Icons.Alert /> Conferir</div>}
+                                                    </td>
+                                                    <td className="p-10">
+                                                        {s.isIncomplete ? (
+                                                            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-center text-amber-700 text-xs font-bold">⚠️ Dados incompletos neste relatório ({s.discipline || 'disciplina não identificada'}) — percentual não calculado. Confira o PDF e reimporte se necessário.</div>
+                                                        ) : (
+                                                        <div className="space-y-6">
+                                                            <ImpactBar label={`Limite Total na Disciplina (${s.totalCHP}h)`} value={s.percentage} threshold={25} thresholdLabel="máx. 25%" />
+                                                            <ImpactBar label={`Comprometimento Atual (${s.horasDadas}h dadas)`} value={s.realPercentage} threshold={30} thresholdLabel="alerta 30%" />
+                                                        </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="p-10 text-right"><div className="relative group/btn inline-block">
+                                                        {s.isIncomplete ? (
+                                                            <span className="px-6 py-3 rounded-2xl font-black text-[11px] uppercase shadow-none whitespace-nowrap bg-amber-100 text-amber-700">Verificar PDF</span>
+                                                        ) : (
+                                                        <button onClick={() => s.isCompensar && setActiveForm(s)} className={`px-6 py-3 rounded-2xl font-black text-[11px] uppercase shadow-lg transition-all whitespace-nowrap active:scale-95 ${s.isCompensar ? 'bg-red-600 text-white hover:bg-red-700' : s.isPreventive ? 'bg-blue-600 text-white shadow-blue-200' : 'bg-emerald-100 text-emerald-700 shadow-none'}`}>{s.isCompensar ? 'Compensar' : s.isPreventive ? 'Ação Preventiva' : 'Regular'}{s.isCompensar && <Icons.Download />}</button>
+                                                        )}
+                                                        {s.isCompensar && <div className="absolute bottom-full right-0 mb-3 px-4 py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl opacity-0 group-hover/btn:opacity-100 transition-opacity whitespace-nowrap shadow-2xl z-[60]">⚠️ Compensar {toComp}h para atingir 75%<div className="absolute top-full right-4 border-[6px] border-transparent border-t-slate-900"></div></div>}
+                                                        {s.isPreventive && <div className="absolute bottom-full right-0 mb-3 px-4 py-2 bg-blue-700 text-white text-[10px] font-black rounded-xl opacity-0 group-hover/btn:opacity-100 transition-opacity whitespace-nowrap shadow-2xl z-[60]">📢 Alerta! Faltou {s.realPercentage.toFixed(1)}% do dado até aqui.<div className="absolute top-full right-4 border-[6px] border-transparent border-t-blue-700"></div></div>}
+                                                    </div></td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </main>
+
+                    {activeForm && (
+                        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[70] flex items-start justify-center p-4 py-10 overflow-y-auto print-overlay">
+                            <div className="bg-white w-full max-w-[21cm] shadow-2xl relative printable-form p-12 text-black leading-tight">
+                                <div className="absolute top-6 right-6 flex gap-2 no-print"><button onClick={() => window.print()} className="bg-indigo-600 text-white p-3 rounded-xl hover:bg-indigo-700 shadow-lg flex items-center gap-2 font-bold text-xs uppercase"><Icons.Printer /> Imprimir / PDF</button><button onClick={() => setActiveForm(null)} className="bg-slate-100 p-3 rounded-xl hover:bg-slate-200 text-slate-400"><Icons.X /></button></div>
+                                <div className="text-right text-[10px] font-bold mb-2">Lista Mestra - Coordenação Pedagógica</div>
+                                <table className="w-full border-collapse border border-black mb-8 text-center">
+                                    <tr><td rowSpan="3" className="w-[18%] p-3 border border-black">{!logoFailed && <img src={LOGO_DATA_URI} className="h-10 mx-auto" />}</td><td className="font-bold text-sm uppercase py-2 border border-black bg-slate-50">CT 7.90 - CENTRO DE TREINAMENTO SENAI “EDWARD SÁVIO”</td><td className="w-[12%] border border-black text-[8px] font-bold">CT 7.90</td><td className="w-[12%] border border-black text-[8px] font-bold">FR-44</td></tr>
+                                    <tr><td rowSpan="2" className="font-bold border border-black text-[12px]">Registro de Compensação de Ausência</td><td className="border border-black text-[9px] font-bold">Aprovação</td><td className="border border-black text-[9px] font-bold">Data</td></tr>
+                                    <tr><td className="border border-black text-[8px]">Coord. Pedagógico</td><td className="border border-black text-[8px]">03/12/2024</td></tr>
+                                </table>
+                                <div className="border border-black text-[13px]"><div className="flex border-b border-black"><div className="w-2/3 p-3 border-r border-black"><b className="text-[10px] uppercase text-slate-500 block mb-1">Aluno:</b> {activeForm.name}</div><div className="w-1/3 p-3"><b className="text-[10px] uppercase text-slate-500 block mb-1">Turma:</b> {activeForm.className}</div></div><div className="flex border-b border-black"><div className="w-2/3 p-3 border-r border-black"><b className="text-[10px] uppercase text-slate-500 block mb-1">Componente(s) Curricular(es):</b> {activeForm.discipline}</div><div className="w-1/3 p-3"><b className="text-[10px] uppercase text-slate-500 block mb-1">Curso:</b> {activeForm.curso}</div></div><div className="p-3"><b className="text-[10px] uppercase text-slate-500 block mb-1">Docente:</b> {activeForm.docente}</div></div>
+                                <table className="w-full border-collapse border border-black text-xs mt-6">
+                                    <tr><td className="p-4 w-1/4 border border-black text-center bg-slate-50"><span className="text-[9px] block font-bold uppercase mb-1">Ausências a compensar</span><span className="text-2xl font-black">{Math.ceil(activeForm.absences - (activeForm.totalCHP * 0.25))} aulas</span></td><td className="p-2 w-1/4 border border-black text-center font-bold uppercase align-middle">DE ACORDO</td><td className="p-2 w-1/4 border border-black"></td><td className="p-2 w-1/4 border border-black"></td></tr>
+                                    <tr className="text-center text-[9px] text-slate-400 font-bold uppercase"><td className="border border-black font-black bg-slate-100 text-slate-800">REGISTRO</td><td className="border border-black">Aluno ou Resp.</td><td className="border border-black">Docente</td><td className="border border-black">Orientador P.P.</td></tr>
+                                </table>
+                                <table className="w-full border-collapse border border-black text-[10px] mt-6 text-center">
+                                    <tr className="bg-slate-50 font-bold border-b border-black uppercase tracking-widest"><th colSpan="3" className="border-r border-black py-2">PLANEJADO</th><th colSpan="3" className="py-2">EXECUTADO</th></tr>
+                                    <tr className="font-bold border-b border-black text-[9px]"><td>Data</td><td>Horário</td><td>Nº Aulas*</td><td>Visto Aluno</td><td>Visto Monitor</td><td>Titular</td></tr>
+                                    {[1,2,3,4,5,6].map(i => <tr key={i} className="h-10 border-b border-black last:border-0"><td>{i === 1 ? '___/___/___' : ''}</td><td></td><td></td><td></td><td></td><td></td></tr>)}
+                                </table>
+                                <div className="text-[8px] italic font-bold mt-2 text-slate-500">* Máximo 4 aulas por turno</div>
+                                <div className="mt-8 border border-black min-h-[4cm] rounded-sm"><div className="bg-slate-50 border-b border-black text-[10px] font-black uppercase p-2 px-4">Atividades Diversas de Compensação</div></div>
+                                <div className="mt-4 border border-black min-h-[1.5cm] rounded-sm"><div className="bg-slate-50 border-b border-black text-[10px] font-black uppercase p-1.5 px-4">Observações:</div></div>
+                                <div className="absolute bottom-10 left-12 text-[12px] font-black">Jaú, ____/____/202__</div><div className="absolute bottom-10 right-12 text-[12px] font-black text-slate-300 tracking-widest">7.90-FR-44 v.0</div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showRankingReport && (
+                        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[75] flex items-start justify-center p-4 py-10 overflow-y-auto print-overlay">
+                            <div id="ranking-report-content" className="bg-white w-full max-w-[820px] shadow-2xl relative printable-report rounded-[2rem] overflow-hidden">
+                                <div className="absolute top-6 right-6 flex gap-2 no-print z-10">
+                                    <button onClick={downloadReportImage} title="Baixar como imagem PNG — ideal para enviar no WhatsApp" className="bg-emerald-600 text-white p-3 rounded-xl hover:bg-emerald-700 shadow-lg flex items-center gap-2 font-bold text-xs uppercase"><Icons.Download /> Baixar Imagem</button>
+                                    <button onClick={() => window.print()} title="Imprimir ou salvar como PDF" className="bg-indigo-600 text-white p-3 rounded-xl hover:bg-indigo-700 shadow-lg flex items-center gap-2 font-bold text-xs uppercase"><Icons.Printer /> Imprimir / PDF</button>
+                                    <button onClick={() => setShowRankingReport(false)} title="Fechar e voltar ao painel" className="bg-slate-100 px-4 py-3 rounded-xl hover:bg-slate-200 text-slate-500 flex items-center gap-2 font-black text-xs uppercase"><Icons.X /> Voltar</button>
+                                </div>
+
+                                <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-10 text-center">
+                                    {!logoFailed && <img src={LOGO_DATA_URI} onError={() => setLogoFailed(true)} className="h-10 mx-auto mb-4 bg-white/95 rounded-lg p-1.5" />}
+                                    <h1 className="text-2xl font-black uppercase tracking-wide text-white">🏆 Ranking de Frequência</h1>
+                                    <p className="text-indigo-100 font-bold text-sm mt-1">{selectedTurma === 'Todas' ? 'Todas as Turmas' : selectedTurma} • {new Date().toLocaleDateString('pt-BR')}</p>
+                                </div>
+
+                                <div className="p-8 space-y-10">
+                                    <div>
+                                        <h2 className="text-lg font-black text-emerald-700 mb-4">🏅 Frequência Exemplar — Zero Faltas</h2>
+                                        {rankingReportData.perfect.length === 0 ? (
+                                            <p className="text-sm text-slate-400 font-bold">Nenhum aluno com zero faltas em todas as disciplinas nesta seleção.</p>
+                                        ) : (
+                                            // Todos aqui estão empatados em zero faltas — não faz sentido dar ouro pro
+                                            // primeiro e prata/bronze pros seguintes, então todos recebem a mesma
+                                            // medalha de ouro. Lista única em ordem alfabética (já vem assim de
+                                            // rankingReportData.perfect), não mais em grade de 2 colunas.
+                                            <div className="space-y-2">
+                                                {rankingReportData.perfect.map((st) => (
+                                                    <div key={st.id} className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
+                                                        <span className="text-2xl">🥇</span>
+                                                        <div><div className="font-black text-slate-800 text-sm">{st.name}</div><div className="text-[10px] font-bold text-slate-400 uppercase">RA: {st.id} • {st.className}</div></div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <h2 className="text-lg font-black text-blue-700 mb-4">📢 Ação Preventiva — Atenção Necessária</h2>
+                                        {rankingReportData.preventive.length === 0 ? (
+                                            <p className="text-sm text-slate-400 font-bold">Nenhum aluno em ação preventiva nesta seleção. 🎉</p>
+                                        ) : (
+                                            <div className="space-y-6">
+                                                {rankingReportData.preventive.map(st => (
+                                                    <div key={st.id} className="bg-blue-50/60 border border-blue-200 rounded-2xl p-5">
+                                                        <div className="font-black text-slate-800 mb-1">{st.name}</div>
+                                                        <div className="text-[10px] font-bold text-slate-400 uppercase mb-4">RA: {st.id} • {st.className}</div>
+                                                        <div className="space-y-5">
+                                                            {st.rows.map((r, idx) => (
+                                                                <div key={idx}>
+                                                                    <div className="text-[11px] font-black text-indigo-600 uppercase mb-2">{r.discipline}</div>
+                                                                    <div className="space-y-3">
+                                                                        <ImpactBar label={`Limite Total (${r.totalCHP}h)`} value={r.percentage} threshold={25} thresholdLabel="máx. 25%" />
+                                                                        <ImpactBar label={`Comprometimento Atual (${r.horasDadas}h dadas)`} value={r.realPercentage} threshold={30} thresholdLabel="alerta 30%" />
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="bg-slate-50 border-t border-slate-100 p-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                    CT 7.90 - Centro de Treinamento SENAI "Edward Sávio" • Gestão de Frequência
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {isManageModalOpen && (
+                        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[80] flex items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-2xl rounded-[3rem] p-10 space-y-8 shadow-2xl max-h-[90vh] overflow-y-auto scrollbar-hide">
+                                <div className="flex justify-between items-center"><h2 className="text-2xl font-black text-slate-800">Gerenciar Dados</h2><button onClick={() => setIsManageModalOpen(false)} className="p-2 hover:bg-slate-100 rounded-full text-slate-400"><Icons.X /></button></div>
+
+                                <div className="space-y-3">
+                                    <h3 className="text-sm font-black text-slate-600 uppercase tracking-widest">Relatórios Importados ({Object.keys(dataStore).length})</h3>
+                                    {Object.keys(dataStore).length === 0 && <p className="text-xs text-slate-400 font-bold">Nenhum relatório importado ainda.</p>}
+                                    <div className="space-y-2 max-h-[30vh] overflow-y-auto pr-2 scrollbar-hide">
+                                        {Object.entries(dataStore).map(([key, entry]) => (
+                                            <div key={key} className={`p-4 rounded-2xl border-2 ${entry.warnings && entry.warnings.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-transparent'}`}>
+                                                <div className="flex justify-between items-start gap-3">
+                                                    <div>
+                                                        <p className="font-black text-slate-800 text-sm">{entry.disciplineName} — {entry.className}</p>
+                                                        <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">{entry.fileName} • {entry.students.length} aluno(s) • CHP: {entry.chp ?? 'não identificado'} • Aulas dadas: {entry.horasDadas ?? 'não identificado'}</p>
+                                                        {entry.warnings && entry.warnings.length > 0 && (
+                                                            <ul className="list-disc list-inside text-amber-700 text-[10px] mt-2 space-y-0.5">
+                                                                {entry.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                                                            </ul>
+                                                        )}
+                                                    </div>
+                                                    <button onClick={() => removeEntry(key)} title="Remover este relatório" className="shrink-0 p-2 rounded-xl bg-white border border-slate-200 text-red-500 hover:bg-red-50"><Icons.Trash /></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {Object.keys(dataStore).length > 0 && (
+                                        <button onClick={clearAllData} className="w-full bg-red-50 text-red-600 py-3 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-red-100">Limpar todos os dados importados</button>
+                                    )}
+                                </div>
+
+                                <div className="space-y-3 border-t border-slate-100 pt-8">
+                                    <h3 className="text-sm font-black text-slate-600 uppercase tracking-widest">Grupo de Monitoramento</h3>
+                                    <p className="text-[10px] text-slate-400 font-bold -mt-2">Clique para incluir/ignorar um aluno nos cálculos e listas.</p>
+                                    <div className="max-h-[40vh] overflow-y-auto space-y-3 pr-2 scrollbar-hide">
+                                        {Object.values(dataStore).flatMap(e => e.students).filter((v, i, a) => a.findIndex(t => t.id === v.id) === i).map(s => (
+                                            <div key={s.id} onClick={() => { const n = new Set(ignoredIds); n.has(s.id) ? n.delete(s.id) : n.add(s.id); setIgnoredIds(n); }} className={`p-5 rounded-2xl cursor-pointer flex justify-between items-center border-2 transition-all ${!ignoredIds.has(s.id) ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-transparent opacity-40 grayscale'}`}>
+                                                <div><div className="font-bold text-slate-800">{s.name}</div><div className="text-[10px] font-bold text-slate-400 uppercase">RA: {s.id}</div></div>
+                                                {!ignoredIds.has(s.id) && <div className="text-indigo-600"><Icons.Check /></div>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <button onClick={() => setIsManageModalOpen(false)} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black uppercase tracking-[0.4em] shadow-xl active:scale-95 transition-all">Fechar</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
